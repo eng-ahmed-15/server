@@ -84,7 +84,7 @@ def broadcast(data: bytes, sender=None):
 
 
 def main():
-    port = int(os.environ.get("PORT", 50000))
+    port = int(os.environ.get("RAILWAY_TCP_APPLICATION_PORT", 3000))
     host = "0.0.0.0"
 
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
