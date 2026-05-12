@@ -11,17 +11,18 @@ def handle_client(conn, addr):
     with clients_lock:
         clients.append(conn)
 
-    buffer = b""
+    buffer     = b""
+    terminator = b"\nEND_OF_TRANSFER\n"
 
     while True:
         try:
-            chunk = conn.recv(4096)
+            chunk = conn.recv(65536)
             if not chunk:
                 break
             buffer += chunk
 
-            # ── File / Image transfer ──
-            terminator = b"\nEND_OF_TRANSFER\n"
+            # 1) File/Image -- شيك على الـ terminator الاول دايما
+            # عشان الـ binary data متتمسش من الـ text loop
             while terminator in buffer:
                 before, buffer = buffer.split(terminator, 1)
                 newline_pos = before.find(b"\n")
@@ -32,27 +33,24 @@ def handle_client(conn, addr):
                     header    = before.decode(errors="ignore").strip()
                     file_data = b""
 
-                # Broadcast header + data + terminator as-is to others
                 full = (header + "\n").encode() + file_data + terminator
                 broadcast(full, sender=conn)
-                print(f"[File] {header} from {addr} → {len(file_data)} bytes", flush=True)
+                print(f"[File] {header} from {addr} -> {len(file_data)} bytes", flush=True)
 
-            # ── Text messages (line by line) ──
+            # 2) Text messages
+            # لو الـ buffer بيبدأ بـ TYPE: معناه file قادم -- استنى
             while b"\n" in buffer:
+                next_newline = buffer.index(b"\n")
+                first_line   = buffer[:next_newline].decode(errors="ignore").strip()
+
+                if first_line.startswith("TYPE:"):
+                    break
+
                 line, buffer = buffer.split(b"\n", 1)
                 line_str = line.decode(errors="ignore").strip()
-
-                if not line_str:
-                    continue
-
-                # Ignore stray TYPE: headers (shouldn't reach here normally)
-                if line_str.startswith("TYPE:"):
-                    continue
-
-                # Broadcast the message exactly as sent by client (already has username)
-                # Client sends: "Ahmed: hello\n"
-                broadcast((line_str + "\n").encode(), sender=conn)
-                print(f"[MSG] {line_str}", flush=True)
+                if line_str:
+                    broadcast((line_str + "\n").encode(), sender=conn)
+                    print(f"[MSG] {line_str}", flush=True)
 
         except Exception as e:
             print(f"[!] Error from {addr}: {e}", flush=True)
