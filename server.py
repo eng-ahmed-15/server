@@ -20,43 +20,39 @@ def handle_client(conn, addr):
                 break
             buffer += chunk
 
-            # ── Text message (ends with \n, no TYPE: header) ──
+            # ── File / Image transfer ──
+            terminator = b"\nEND_OF_TRANSFER\n"
+            while terminator in buffer:
+                before, buffer = buffer.split(terminator, 1)
+                newline_pos = before.find(b"\n")
+                if newline_pos != -1:
+                    header    = before[:newline_pos].decode(errors="ignore").strip()
+                    file_data = before[newline_pos + 1:]
+                else:
+                    header    = before.decode(errors="ignore").strip()
+                    file_data = b""
+
+                # Broadcast header + data + terminator as-is to others
+                full = (header + "\n").encode() + file_data + terminator
+                broadcast(full, sender=conn)
+                print(f"[File] {header} from {addr} → {len(file_data)} bytes", flush=True)
+
+            # ── Text messages (line by line) ──
             while b"\n" in buffer:
-                line, rest = buffer.split(b"\n", 1)
+                line, buffer = buffer.split(b"\n", 1)
                 line_str = line.decode(errors="ignore").strip()
 
+                if not line_str:
+                    continue
+
+                # Ignore stray TYPE: headers (shouldn't reach here normally)
                 if line_str.startswith("TYPE:"):
-                    # ── File or Image transfer ──
-                    # Header format: TYPE:IMG;NAME:photo.jpg;HD:1
-                    #                TYPE:FILE;NAME:doc.pdf
-                    header = line_str
-                    # Collect body until END_OF_TRANSFER
-                    body_buf = rest
-                    terminator = b"\nEND_OF_TRANSFER\n"
+                    continue
 
-                    while terminator not in body_buf:
-                        more = conn.recv(65536)
-                        if not more:
-                            break
-                        body_buf += more
-
-                    if terminator in body_buf:
-                        file_data, after = body_buf.split(terminator, 1)
-                        buffer = after
-                        # Broadcast header + data + terminator to others
-                        full = (header + "\n").encode() + file_data + terminator
-                        broadcast(full, sender=conn)
-                        print(f"[File] {header} from {addr} → {len(file_data)} bytes", flush=True)
-                    else:
-                        buffer = b""
-                    break
-
-                else:
-                    # Plain text message
-                    msg = f"[{addr[0]}:{addr[1]}]: {line_str}\n"
-                    print(msg, end="", flush=True)
-                    broadcast(msg.encode(), sender=conn)
-                    buffer = rest
+                # Broadcast the message exactly as sent by client (already has username)
+                # Client sends: "Ahmed: hello\n"
+                broadcast((line_str + "\n").encode(), sender=conn)
+                print(f"[MSG] {line_str}", flush=True)
 
         except Exception as e:
             print(f"[!] Error from {addr}: {e}", flush=True)
@@ -77,7 +73,7 @@ def broadcast(data: bytes, sender=None):
                 continue
             try:
                 c.sendall(data)
-            except:
+            except Exception:
                 dead.append(c)
         for c in dead:
             clients.remove(c)
@@ -86,13 +82,11 @@ def broadcast(data: bytes, sender=None):
 def main():
     port = int(os.environ.get("RAILWAY_TCP_APPLICATION_PORT", 3000))
     host = "0.0.0.0"
-
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server.bind((host, port))
     server.listen()
     print(f"[*] Server on {host}:{port}", flush=True)
-
     while True:
         conn, addr = server.accept()
         threading.Thread(target=handle_client, args=(conn, addr), daemon=True).start()
